@@ -1,35 +1,33 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Redirect, Stack } from 'expo-router';
+import { useAuth } from '@clerk/clerk-expo';
+import { ActivityIndicator, View } from 'react-native';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+// This layout controls the main, protected part of the app.
+export default function TabsLayout() {
+  const { isSignedIn, isLoaded } = useAuth();
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  // Wait until Clerk has loaded its auth state
+  if (!isLoaded) {
+    // Show a loading spinner while we check for a saved session
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
+  // If the user is not signed in, redirect them to the sign-in screen.
+  if (!isSignedIn) {
+    return <Redirect href="/(auth)/sign-in" />;
+  }
+  
+  // If the user is signed in, show the main app screens.
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
-        }}
-      />
-    </Tabs>
+    <Stack>
+      <Stack.Screen name="index" options={{ title: 'Dashboard' }} />
+      <Stack.Screen name="[id]" options={{ title: 'Task Details' }} />
+      <Stack.Screen name="scanner" options={{ title: 'Scan Package' }} />
+      <Stack.Screen name="signature" options={{ title: 'Capture Signature' }} />
+    </Stack>
   );
 }
