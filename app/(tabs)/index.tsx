@@ -7,9 +7,8 @@ import { useAuth, useUser } from '@clerk/clerk-expo';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 
-// IMPORTANT: Make sure this is your correct IP or ngrok URL
-// Note: This must be the SAME URL as your API server
-const SERVER_URL = "http://192.168.0.16:4000";
+// IMPORTANT: Use the correct, working IP you found
+const SERVER_URL = "http://192.168.0.16:4000"; 
 const API_URL = `${SERVER_URL}/api`;
 
 type Task = {
@@ -19,7 +18,6 @@ type Task = {
   destination: string;
 };
 
-// Reusable component for each item in the task list
 const TaskItem = ({ item }: { item: Task }) => {
   return (
     <Link href={{ pathname: `/(tabs)/${item.id}`, params: { id: item.id } }} asChild>
@@ -48,116 +46,164 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [driverDbId, setDriverDbId] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false); // Controls single execution
 
   const { user } = useUser();
-  const { signOut } = useAuth();
+  const { signOut, getToken } = useAuth();
   
+  // Refs for persistent connections and state safety
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
-  const socket = useRef<Socket | null>(null); // Ref to hold the socket connection
+  const socket = useRef<Socket | null>(null); 
+  const tasksRef = useRef<Task[]>([]); 
+  const isMounted = useRef(true); 
 
-  // Fetches the list of tasks from the server
-  const fetchTasks = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`${API_URL}/shipments`);
-      if (!response.ok) {
-        throw new Error('Failed to connect to the server. Is it running?');
-      }
-      const data = await response.json();
-      setTasks(data);
-    } catch (err: any) {
-      console.error("Failed to fetch tasks:", err);
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  // Function to send the location data to our backend API via Socket.IO
-  const sendLocationToServer = (location: Location.LocationObject, dbId: string) => {
-    // Find an active shipment to notify the customer
-    const activeShipment = tasks.find(t => t.status === 'In Transit');
-    
-    // ALWAYS broadcast the location to the admin map
-    if (socket.current && dbId) {
-      socket.current.emit('driverLocationUpdate', {
-        driverId: dbId,
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        trackingNumber: activeShipment ? activeShipment.trackingNumber : null // Send tracking# only if active
-      });
-    }
-  };
-
-  // This useEffect runs once when the user logs in
+  // Effect 1: Always keep the tasksRef up-to-date with the latest tasks state
   useEffect(() => {
-    if (!user) return; // Wait for Clerk user to be loaded
-    const driverEmail = user.primaryEmailAddress?.emailAddress;
-    if (!driverEmail) return;
+    tasksRef.current = tasks;
+  }, [tasks]);
 
-    let subscription: Location.LocationSubscription | null = null;
 
-    const initializeDriver = async () => {
-      try {
-        // 1. Fetch the driver's database profile using their email
-        const response = await fetch(`${API_URL}/drivers/by-email/${driverEmail}`);
-        if (!response.ok) {
-          throw new Error('Driver profile not found. Have you created it in the Admin Dashboard?');
+  // 2. Data Fetching Logic (Triggers on User Load)
+  const fetchTasks = useCallback(async () => {
+    // Only set loading true if it's the very first time
+    if (!isInitialized) setIsLoading(true);
+    setError(null);
+    
+    const token = await getToken(); 
+    if (!token) {
+      if (isMounted.current) {
+        setError("Authentication token not found. Please sign in again.");
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/drivers`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
         }
-        const driverProfile = await response.json();
-        const dbId = driverProfile.id;
-        setDriverDbId(dbId);
+      });
+      
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({ error: `HTTP Status ${response.status} Error.` }));
+        throw new Error(errorBody.error || `Server rejected request. Status: ${response.status}.`);
+      }
+      
+      const data = await response.json();
+      const fetchedDriverId = response.headers.get('X-Driver-ID'); 
+      
+      if (isMounted.current) { 
+        if (fetchedDriverId) {
+            setDriverDbId(fetchedDriverId); 
+        }
+        setTasks(data.tasks || data); 
+      }
+      
+    } catch (err: any) {
+      if (isMounted.current) {
+        if (err.message.includes("Network")) {
+          setError(`Network Connection Failed. Confirm server is running at ${SERVER_URL}.`);
+        } else {
+          setError(err.message);
+        }
+        console.error("Failed to fetch tasks securely:", err);
+      }
+    } finally {
+      if (isMounted.current) {
+         setIsLoading(false);
+         // Mark initialization as complete ONLY AFTER data is received
+         setIsInitialized(true); 
+      }
+    }
+  }, [getToken, isInitialized]); 
 
-        // 2. Connect to the Socket.IO server
-        socket.current = io(SERVER_URL);
-        socket.current.on('connect', () => {
+  // Effect runs on user login, and manages mount status
+  useEffect(() => {
+    // We want to run fetchTasks only once when the user object becomes available
+    if (user && !isInitialized) { 
+        fetchTasks();
+    }
+    
+    // Cleanup runs on component unmount
+    return () => {
+        isMounted.current = false; // Prevents state updates after cleanup
+    };
+  }, [user, isInitialized, fetchTasks]); // isInitialized is critical here
+
+  // 3. Socket/Location Initialization 
+  // FIX: This useEffect now only depends on the two flags that confirm successful setup
+  useEffect(() => {
+    if (!driverDbId || !isInitialized) return; 
+
+    // Ensure we only connect and watch once per successful initialization cycle
+    if (socket.current || locationSubscription.current) return;
+
+    // --- Stable function defined inside the effect closure ---
+    const sendLocationToServer = (location: Location.LocationObject, dbId: string) => {
+        const activeShipment = tasksRef.current.find(t => t.status === 'In Transit'); 
+        
+        if (socket.current && dbId) {
+            socket.current.emit('driverLocationUpdate', {
+                driverId: dbId,
+                latitude: location.coords.latitude,
+                longitude: location.coords.longitude,
+                trackingNumber: activeShipment ? activeShipment.trackingNumber : null 
+            });
+        }
+    };
+    // --------------------------------------------------------
+
+    const initializeSocketAndLocation = async (dbId: string) => {
+      try {
+        // 1. Connect to the Socket.IO server 
+        const newSocket = io(SERVER_URL);
+        newSocket.on('connect', () => {
           console.log('Socket.IO connected!');
-          socket.current?.emit('joinDriverRoom', dbId);
+          newSocket?.emit('joinDriverRoom', dbId);
         });
-
-        // 3. Get location permission
+        socket.current = newSocket;
+        
+        // 2. Get location permission and start tracking... 
         let { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
           Alert.alert('Permission Denied', 'Location permission is required.');
           return;
         }
 
-        // 4. Start watching the location
-        subscription = await Location.watchPositionAsync(
+        const subscription = await Location.watchPositionAsync(
           { 
             accuracy: Location.Accuracy.High, 
-            timeInterval: 10000, // Send update every 10 seconds
-            distanceInterval: 10 // Or every 10 meters
+            timeInterval: 10000, 
+            distanceInterval: 10
           },
-          (location) => {
-            console.log('Mobile App: New location:', location.coords.latitude, location.coords.longitude);
-            sendLocationToServer(location, dbId); // Use the correct database ID
-          }
+          (location) => { sendLocationToServer(location, dbId); } 
         );
         locationSubscription.current = subscription;
-
+        
       } catch (err: any) {
-        Alert.alert("Driver Error", err.message);
-        setError(err.message);
+        Alert.alert("Socket/Location Error", err.message);
+        console.error("Socket/Location Error:", err);
       }
     };
 
-    initializeDriver();
+    initializeSocketAndLocation(driverDbId);
 
-    // Cleanup function: This runs when the component is unmounted (e.g., driver signs out)
+    // Cleanup logic runs only when driverDbId changes (i.e., sign out)
     return () => {
-      if (subscription) subscription.remove();
-      if (socket.current) socket.current.disconnect();
-      console.log('Location tracking & Socket.IO disconnected.');
+      if (locationSubscription.current) {
+        locationSubscription.current.remove();
+        locationSubscription.current = null;
+      }
+      if (socket.current) {
+         socket.current.disconnect();
+         socket.current = null;
+      }
+      console.log('Full cleanup: Location tracking & Socket.IO disconnected.');
     };
-  }, [user]); // Re-run this effect if the user changes
+  }, [driverDbId, isInitialized]); 
 
-  // This useEffect fetches the tasks on initial load.
-  useEffect(() => {
-    fetchTasks();
-  }, [fetchTasks]);
-
+  // The rendering logic remains the same
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
@@ -168,7 +214,8 @@ export default function Dashboard() {
         </Text>
       </View>
 
-      {isLoading ? (
+      {/* FIX: Loader now relies on isInitialized to know when the background work is truly done */}
+      {isLoading && !isInitialized ? ( 
         <ActivityIndicator size="large" style={{ marginTop: 50 }} />
       ) : error ? (
         <View style={styles.emptyContainer}>
