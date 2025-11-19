@@ -4,26 +4,22 @@ import { StyleSheet, Text, View, Alert, ActivityIndicator } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-// Added Auth hook
-import { useAuth } from '@clerk/clerk-expo';
 import Button from "@/components/ui/Button";
 
-// IMPORTANT: Make sure this matches your computer's IP in index.tsx
-const SERVER_URL = "http://192.168.0.16:4000"; 
-const API_URL = `${SERVER_URL}/api`;
+import { useShipmentApi } from '@/hooks/useShipmentApi';
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const { getToken } = useAuth(); // Get Token
   
-  const { shipmentId, trackingNumber, currentStatus } = useLocalSearchParams();
+  // Use Hook
+  const { updateStatus } = useShipmentApi();
+  
+  const { shipmentId, trackingNumber, currentStatus } = useLocalSearchParams<{ shipmentId: string, trackingNumber: string, currentStatus: string }>();
   const router = useRouter();
 
-  if (!permission) { 
-    return <View style={styles.container} />; 
-  }
+  if (!permission) return <View style={styles.container} />;
 
   if (!permission.granted) {
     return (
@@ -44,26 +40,24 @@ export default function ScannerScreen() {
   
   const handleBarCodeScanned = async ({ data }: { data: string }) => {
     if (scanned) return;
-
     setScanned(true);
-    setIsLoading(true);
 
     if (data !== trackingNumber) {
       Alert.alert(
         'Wrong Package', 
         `Expected: ${trackingNumber}\nScanned: ${data}`,
-        [{ text: 'Try Again', onPress: () => { setScanned(false); setIsLoading(false); } }]
+        [{ text: 'Try Again', onPress: () => setScanned(false) }]
       );
       return;
     }
 
+    setIsLoading(true);
+
+    // Logic moved to frontend state determination, api update stays generic
     let nextStatus = '';
-    if (currentStatus === 'Pending') {
-      nextStatus = 'In Transit';
-    } else if (currentStatus === 'In Transit') {
-      nextStatus = 'Delivered';
-    } else {
-      // Safety catch
+    if (currentStatus === 'Pending') nextStatus = 'In Transit';
+    else if (currentStatus === 'In Transit') nextStatus = 'Delivered';
+    else {
       Alert.alert('Status Info', `This package is already ${currentStatus}.`);
       setIsLoading(false);
       router.back();
@@ -71,21 +65,8 @@ export default function ScannerScreen() {
     }
 
     try {
-      const token = await getToken(); // Get Secure Token
-
-      // Use the secure route (if your backend supports it) OR add headers to existing
-      const response = await fetch(`${API_URL}/shipments/${shipmentId}`, {
-        method: 'PUT',
-        headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}` // AUTH ADDED
-        },
-        body: JSON.stringify({ status: nextStatus }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update shipment status.');
-      }
+      // Clean API Call
+      await updateStatus(shipmentId, nextStatus);
 
       if (nextStatus === 'Delivered') {
         router.replace({ 
@@ -99,7 +80,6 @@ export default function ScannerScreen() {
             [{ text: 'OK', onPress: () => router.back() }]
         );
       }
-
     } catch (error: any) {
       Alert.alert('Error', error.message || 'An unknown error occurred.');
       setScanned(false);
@@ -114,9 +94,7 @@ export default function ScannerScreen() {
       
       <CameraView
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-        barcodeScannerSettings={{
-          barcodeTypes: ["qr", "code128"],
-        }}
+        barcodeScannerSettings={{ barcodeTypes: ["qr", "code128"] }}
         style={StyleSheet.absoluteFillObject}
       />
 
@@ -143,7 +121,7 @@ export default function ScannerScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
   permissionContainer: { flex: 1, backgroundColor: '#f8fafc', justifyContent: 'center', padding: 20 },
-  permissionContent: { alignItems: 'center', padding: 24, backgroundColor: 'white', borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10 },
+  permissionContent: { alignItems: 'center', padding: 24, backgroundColor: 'white', borderRadius: 16 },
   iconCircle: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
   permissionTitle: { fontSize: 20, fontWeight: 'bold', color: '#0f172a', marginBottom: 10 },
   permissionText: { fontSize: 16, color: '#64748b', textAlign: 'center', marginBottom: 24 },

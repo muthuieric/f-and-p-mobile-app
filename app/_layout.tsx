@@ -5,6 +5,7 @@ import * as SecureStore from 'expo-secure-store';
 import { View, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import "../global.css"; 
+import { tokenCache } from '@/utils/cache';
 
 const CLERK_PUBLISHABLE_KEY = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!;
 
