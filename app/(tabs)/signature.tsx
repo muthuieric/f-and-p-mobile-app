@@ -1,51 +1,70 @@
 import React, { useRef, useState } from 'react';
-import { View, StyleSheet, Button, Text, Alert, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Text, Alert, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import SignatureScreen, { SignatureViewRef } from 'react-native-signature-canvas';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '@clerk/clerk-expo';
+import Button from "@/components/ui/Button";
 
 // IMPORTANT: Make sure this is the correct IP address of your computer.
-const API_URL = "http://192.168.0.16:4000/api";
+const SERVER_URL = "http://192.168.0.16:4000"; 
+const API_URL = `${SERVER_URL}/api`;
 
 export default function SignatureCaptureScreen() {
   const { shipmentId, trackingNumber } = useLocalSearchParams();
   const router = useRouter();
+  const { getToken } = useAuth(); // <--- ADDED: Get the auth hook
   const ref = useRef<SignatureViewRef>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Called when the user clicks "Confirm"
+  // Called when the user clicks "Confirm" inside the canvas
   const handleOK = async (signature: string) => {
     setIsLoading(true);
     try {
-      // The signature from the canvas is already a base64 string, but it includes a prefix.
-      // We need to send just the data part.
+      // 1. Get the User Token
+      const token = await getToken();
+      
+      if (!token) {
+        throw new Error("Authentication lost. Please login again.");
+      }
+
+      // 2. Prepare Base64 (Strip prefix if needed, but ImageKit usually handles it)
+      // We'll send it exactly as ImageKit expects it.
       const base64Data = signature.replace('data:image/png;base64,', '');
 
+      // 3. Send to Server WITH Authorization Header
       const response = await fetch(`${API_URL}/shipments/${shipmentId}/signature`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}` // <--- CRITICAL FIX
+        },
         body: JSON.stringify({
-          signature: `data:image/png;base64,${base64Data}`, // Re-add prefix for ImageKit
+          signature: `data:image/png;base64,${base64Data}`, 
           trackingNumber,
         }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to upload signature.');
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to upload signature.');
       }
 
-      Alert.alert("Signature Saved!", `Proof of delivery for ${trackingNumber} has been uploaded.`);
-      // Navigate back to the main dashboard after success
-      router.replace('/(tabs)');
+      Alert.alert(
+          "Delivery Complete!", 
+          `Proof of delivery for ${trackingNumber} recorded.`,
+          [{ text: "Back to Dashboard", onPress: () => router.replace('/(tabs)') }]
+      );
 
     } catch (error: any) {
+      console.error("Upload error:", error);
       Alert.alert("Upload Error", error.message || "An unknown error occurred.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Called when the user clicks "Clear"
   const handleClear = () => {
     ref.current?.clearSignature();
   };
@@ -56,21 +75,43 @@ export default function SignatureCaptureScreen() {
     }
   };
 
-  // CSS to hide the default footer of the signature canvas
-  const style = `.m-signature-pad--footer {display: none; margin: 0px;}`;
+  // Custom CSS for the WebView signature pad to match our theme
+  const webStyle = `
+    .m-signature-pad { 
+        box-shadow: none; 
+        border: none; 
+        background-color: #f8fafc;
+    } 
+    .m-signature-pad--body {
+        border: 2px dashed #cbd5e1;
+        border-radius: 16px;
+    }
+    .m-signature-pad--footer {
+        display: none; margin: 0px;
+    }
+    body,html { 
+        background-color: #f8fafc; 
+    }
+  `;
 
   return (
     <SafeAreaView style={styles.container}>
-      <Stack.Screen options={{ title: 'Capture Signature' }} />
+      <Stack.Screen options={{ headerShown: false }} />
+      
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Proof of Delivery</Text>
-        <Text style={styles.subtitle}>Please have the receiver sign below for {trackingNumber}.</Text>
+        <Text style={styles.title}>Customer Signature</Text>
+        <Text style={styles.subtitle}>Please sign below to confirm receipt.</Text>
+        <View style={styles.tagContainer}>
+            <Ionicons name="cube-outline" size={16} color="#2563eb" />
+            <Text style={styles.trackingText}>{trackingNumber}</Text>
+        </View>
       </View>
 
       {isLoading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" />
-          <Text style={styles.loadingText}>Uploading Signature...</Text>
+          <ActivityIndicator size="large" color="#2563eb" />
+          <Text style={styles.loadingText}>Uploading Proof of Delivery...</Text>
         </View>
       ) : (
         <>
@@ -78,14 +119,21 @@ export default function SignatureCaptureScreen() {
             <SignatureScreen
               ref={ref}
               onOK={handleOK}
-              descriptionText=""
-              webStyle={style}
-              backgroundColor="rgba(255, 255, 255, 1)"
+              webStyle={webStyle}
+              backgroundColor="#f8fafc"
+              descriptionText="Sign above"
             />
           </View>
+          
           <View style={styles.buttonContainer}>
-            <Button title="Clear" onPress={handleClear} color="#ef4444" />
-            <Button title="Confirm Signature" onPress={handleConfirm} />
+            <TouchableOpacity onPress={handleClear} style={styles.clearButton}>
+                <Text style={styles.clearButtonText}>Clear</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity onPress={handleConfirm} style={styles.confirmButton}>
+                <Ionicons name="checkmark-circle" size={20} color="white" style={{ marginRight: 8 }} />
+                <Text style={styles.confirmButtonText}>Confirm Delivery</Text>
+            </TouchableOpacity>
           </View>
         </>
       )}
@@ -99,32 +147,84 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   header: {
-    padding: 20,
+    padding: 24,
+    backgroundColor: 'white',
     borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
+    borderBottomColor: '#f1f5f9',
+    alignItems: 'center'
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 4
   },
   subtitle: {
-    fontSize: 16,
-    color: 'gray',
-    marginTop: 5,
+    fontSize: 15,
+    color: '#64748b',
+    marginBottom: 12
+  },
+  tagContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  trackingText: {
+    color: '#2563eb',
+    fontWeight: '600',
+    marginLeft: 6,
+    fontSize: 14
   },
   signatureBox: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
     margin: 20,
+    borderRadius: 16,
+    overflow: 'hidden', // Ensures rounded corners work on the webview
   },
   buttonContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+    padding: 24,
+    backgroundColor: 'white',
     borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
+    borderTopColor: '#f1f5f9',
+    gap: 16
+  },
+  clearButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'white'
+  },
+  clearButtonText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '700'
+  },
+  confirmButton: {
+    flex: 2,
+    flexDirection: 'row',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563eb',
+    shadowColor: "#2563eb",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  confirmButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700'
   },
   loadingContainer: {
     flex: 1,
@@ -132,9 +232,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingText: {
-    marginTop: 10,
+    marginTop: 16,
     fontSize: 16,
-    color: 'gray',
+    fontWeight: '600',
+    color: '#64748b',
   },
 });
-

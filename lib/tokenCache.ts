@@ -1,7 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
-// This helper object is now in a separate 'lib' folder
-// so Expo Router doesn't mistake it for a screen.
+// This helper object is used by ClerkProvider to securely store JWTs
 export const tokenCache = {
   async getToken(key: string) {
     try {
@@ -12,8 +11,11 @@ export const tokenCache = {
   },
   async saveToken(key: string, value: string) {
     try {
+      // Set the token with a secure option if available (Platform.OS === 'ios')
       return SecureStore.setItemAsync(key, value);
     } catch (err) {
+      // Handle error if SecureStore fails
+      console.error("Failed to save token to SecureStore:", err);
       return;
     }
   },

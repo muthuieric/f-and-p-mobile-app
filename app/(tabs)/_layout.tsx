@@ -1,33 +1,50 @@
-import { Redirect, Stack } from 'expo-router';
-import { useAuth } from '@clerk/clerk-expo';
-import { ActivityIndicator, View } from 'react-native';
+import React from "react";
+import { Tabs } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { Colors } from "@/constants/Colors";
 
-// This layout controls the main, protected part of the app.
-export default function TabsLayout() {
-  const { isSignedIn, isLoaded } = useAuth();
-
-  // Wait until Clerk has loaded its auth state
-  if (!isLoaded) {
-    // Show a loading spinner while we check for a saved session
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
-
-  // If the user is not signed in, redirect them to the sign-in screen.
-  if (!isSignedIn) {
-    return <Redirect href="/(auth)/sign-in" />;
-  }
-  
-  // If the user is signed in, show the main app screens.
+export default function TabLayout() {
   return (
-    <Stack>
-      <Stack.Screen name="index" options={{ title: 'Dashboard' }} />
-      <Stack.Screen name="[id]" options={{ title: 'Task Details' }} />
-      <Stack.Screen name="scanner" options={{ title: 'Scan Package' }} />
-      <Stack.Screen name="signature" options={{ title: 'Capture Signature' }} />
-    </Stack>
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: Colors.light.primary, 
+        tabBarInactiveTintColor: Colors.light.tabIconDefault,
+        tabBarStyle: {
+            paddingBottom: 5,
+            paddingTop: 5,
+            height: 60,
+        },
+        tabBarLabelStyle: {
+            fontSize: 12,
+            fontWeight: '600',
+            marginBottom: 5
+        }
+      }}
+    >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: "Dashboard",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="home" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: "Profile",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen name="[id]" options={{ href: null, headerShown: false }} />
+      <Tabs.Screen name="scanner" options={{ href: null, headerShown: false, tabBarStyle: { display: "none" } }} />
+      <Tabs.Screen name="signature" options={{ href: null, headerShown: false, tabBarStyle: { display: "none" } }} />
+    </Tabs>
   );
 }
