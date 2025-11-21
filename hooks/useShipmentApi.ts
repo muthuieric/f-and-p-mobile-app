@@ -3,15 +3,22 @@ import { Config } from "@/constants/Config";
 import { Shipment } from "@/types";
 
 export const useShipmentApi = () => {
-  const { getToken } = useAuth();
+  const { getToken, signOut } = useAuth();
 
   // Internal helper to handle headers and tokens automatically
   const authenticatedFetch = async (endpoint: string, options: RequestInit = {}) => {
     try {
       const token = await getToken();
       
+      // SAFETY CHECK: If no token, DO NOT THROW. 
+      // Just return a dummy response. The RootLayout will handle the redirect.
       if (!token) {
-        throw new Error("Authentication session expired. Please login again.");
+        console.log("⚠️ [API] No token found, skipping fetch to prevent crash.");
+        return { 
+            ok: false, 
+            status: 401, 
+            json: async () => ({}) 
+        } as Response;
       }
 
       const res = await fetch(`${Config.API_URL}${endpoint}`, {
@@ -23,12 +30,22 @@ export const useShipmentApi = () => {
         },
       });
 
+      // Handle 401 (Unauthorized) from backend by logging out locally
+      if (res.status === 401) {
+        console.log("❌ [API] Session expired, signing out.");
+        await signOut();
+        return { 
+            ok: false, 
+            status: 401, 
+            json: async () => ({}) 
+        } as Response;
+      }
+
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || `Server Error: ${res.status}`);
       }
 
-      // Return the response object so caller can get headers if needed (like X-Driver-ID)
       return res;
     } catch (error: any) {
       console.error(`API Error [${endpoint}]:`, error);
@@ -40,6 +57,10 @@ export const useShipmentApi = () => {
     // GET /api/drivers
     getDriverTasks: async () => {
       const res = await authenticatedFetch("/drivers");
+      
+      // Safety: If 401 or error, return empty list instead of crashing
+      if (!res.ok) return { tasks: [], driverId: null };
+      
       const tasks = await res.json();
       const driverId = res.headers.get("X-Driver-ID");
       return { tasks: tasks as Shipment[], driverId };
@@ -48,6 +69,7 @@ export const useShipmentApi = () => {
     // GET /api/shipments/:id
     getShipmentDetails: async (id: string) => {
       const res = await authenticatedFetch(`/shipments/${id}`);
+      if (!res.ok) throw new Error("Could not fetch details");
       return (await res.json()) as Shipment;
     },
 

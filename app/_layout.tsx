@@ -1,35 +1,18 @@
-import { ClerkProvider, useAuth } from '@clerk/clerk-expo';
-import { Slot, useRouter, useSegments } from 'expo-router';
-import { useEffect } from 'react';
-import * as SecureStore from 'expo-secure-store';
-import { View, ActivityIndicator } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import "../global.css"; 
-import { tokenCache } from '@/utils/cache';
+import { ClerkProvider, ClerkLoaded, useAuth } from "@clerk/clerk-expo";
+import { Slot, useRouter, useSegments } from "expo-router";
+import { useEffect } from "react";
+import { ActivityIndicator, View } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import "../global.css";
+import { tokenCache } from "@/utils/cache"; // <--- IMPORTING YOUR UTILS CACHE
 
 const CLERK_PUBLISHABLE_KEY = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!;
 
-const secureStoreTokenCache = {
-  async getToken(key: string) {
-    try {
-      const token = await SecureStore.getItemAsync(key);
-      console.log(`[Cache] Get Token for ${key}: ${token ? 'Found' : 'Missing'}`);
-      return token;
-    } catch (err) {
-      console.log(`[Cache] Get Token Error:`, err);
-      return null;
-    }
-  },
-  async saveToken(key: string, value: string) {
-    try {
-      await SecureStore.setItemAsync(key, value);
-      console.log(`[Cache] Token Saved for ${key}`);
-    } catch (err) {
-      console.log(`[Cache] Save Token Error:`, err);
-      return;
-    }
-  },
-};
+if (!CLERK_PUBLISHABLE_KEY) {
+  throw new Error(
+    "Missing Publishable Key. Please set EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY in your .env"
+  );
+}
 
 function InitialLayout() {
   const { isLoaded, isSignedIn } = useAuth();
@@ -39,23 +22,43 @@ function InitialLayout() {
   useEffect(() => {
     if (!isLoaded) return;
 
-    const inTabsGroup = segments[0] === '(tabs)';
+    const inTabsGroup = segments[0] === "(tabs)";
+    const inAuthGroup = segments[0] === "(auth)";
 
     console.log("Auth State Changed:", { isSignedIn, inTabsGroup });
 
     if (isSignedIn && !inTabsGroup) {
       // User is signed in, send to dashboard
-      router.replace('/(tabs)');
-    } else if (!isSignedIn && inTabsGroup) {
-      // User is not signed in but trying to access tabs, send to login
-      router.replace('/(auth)/sign-in');
+      router.replace("/(tabs)");
+    } else if (!isSignedIn) {
+      // User is NOT signed in
+      // If they are inside the tabs (dashboard), kick them out to sign-in
+      if (inTabsGroup) {
+        router.replace("/(auth)/sign-in");
+      } 
+      // If they are nowhere (root), send them to sign-in
+      else if (!inAuthGroup) {
+        router.replace("/(auth)/sign-in");
+      }
     }
-  }, [isSignedIn, isLoaded]);
+  }, [isSignedIn, isLoaded, segments]);
 
-  // Show spinner while Clerk loads specifically in the Root
+  // 1. Show spinner while Clerk loads
   if (!isLoaded) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#f8fafc" }}>
+        <ActivityIndicator size="large" color="#2563eb" />
+      </View>
+    );
+  }
+
+  // 2. CRITICAL FIX: Block Dashboard rendering if not authenticated
+  // This prevents the "Network Request Failed" error by ensuring 
+  // we never try to fetch data before we have a user.
+  const inTabsGroup = segments[0] === "(tabs)";
+  if (!isSignedIn && inTabsGroup) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#f8fafc" }}>
         <ActivityIndicator size="large" color="#2563eb" />
       </View>
     );
@@ -66,13 +69,15 @@ function InitialLayout() {
 
 export default function RootLayout() {
   return (
-    <ClerkProvider
-      publishableKey={CLERK_PUBLISHABLE_KEY}
-      tokenCache={secureStoreTokenCache}
+    <ClerkProvider 
+      publishableKey={CLERK_PUBLISHABLE_KEY} 
+      tokenCache={tokenCache} // Use the imported cache
     >
-      <SafeAreaProvider>
-        <InitialLayout />
-      </SafeAreaProvider>
+      <ClerkLoaded>
+        <SafeAreaProvider>
+          <InitialLayout />
+        </SafeAreaProvider>
+      </ClerkLoaded>
     </ClerkProvider>
   );
 }
